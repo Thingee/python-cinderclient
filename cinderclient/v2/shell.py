@@ -52,6 +52,13 @@ def _poll_for_status(poll_fn, obj_id, action, final_ok_states,
             time.sleep(poll_period)
 
 
+def _print_type_extra_specs(vol_type):
+    try:
+        return vol_type.get_keys()
+    except exceptions.NotFound:
+        return "N/A"
+
+
 def _find_volume(cs, volume):
     """Get a volume by ID."""
     return utils.find_resource(cs.volumes, volume)
@@ -62,26 +69,40 @@ def _find_volume_snapshot(cs, snapshot):
     return utils.find_resource(cs.volume_snapshots, snapshot)
 
 
+def _print_volume(volume):
+    utils.print_dict(volume._info)
+
+
 def _print_volume_snapshot(snapshot):
     utils.print_dict(snapshot._info)
 
 
-def _translate_volume_keys(collection):
-    convert = [('volumeType', 'volume_type')]
+def _translate_keys(collection, convert):
     for item in collection:
         keys = item.__dict__.keys()
         for from_key, to_key in convert:
             if from_key in keys and to_key not in keys:
                 setattr(item, to_key, item._info[from_key])
+
+
+def _translate_volume_keys(collection):
+    convert = [('displayName', 'display_name'), ('volumeType', 'volume_type')]
+    _translate_keys(collection, convert)
 
 
 def _translate_volume_snapshot_keys(collection):
-    convert = [('volumeId', 'volume_id')]
-    for item in collection:
-        keys = item.__dict__.keys()
-        for from_key, to_key in convert:
-            if from_key in keys and to_key not in keys:
-                setattr(item, to_key, item._info[from_key])
+    convert = [('displayName', 'display_name'), ('volumeId', 'volume_id')]
+    _translate_keys(collection, convert)
+
+
+def _translate_backup_keys(collection):
+    convert = [('id', 'backup_id'), ('display_name', 'name'),
+               ('display_description', 'description'),
+               ('size', 'size_gb'),
+               ('container', 'swift_container'),
+               ('object_count', 'swift_object_count'),
+               ('availability_zone', 'az')]
+    _translate_keys(collection, convert)
 
 
 def _extract_metadata(args):
@@ -98,29 +119,53 @@ def _extract_metadata(args):
     return metadata
 
 
-@utils.arg('--all-tenants',
-           dest='all_tenants',
-           metavar='<0|1>',
-           nargs='?',
-           type=int,
-           const=1,
-           default=0,
-           help='Display information from all tenants (Admin only).')
-@utils.arg('--all_tenants',
-           nargs='?',
-           type=int,
-           const=1,
-           help=argparse.SUPPRESS)
+def _find_backup(cs, backup):
+    """Get a backup by ID."""
+    return utils.find_resource(cs.backups, backup)
+
+
+def _print_backup(cs, backup):
+    utils.print_dict(backup._info)
+
+
+def _print_volume_type_list(vtypes):
+    utils.print_list(vtypes, ['ID', 'Name'])
+
+
+def _print_type_and_extra_specs_list(vtypes):
+    formatters = {'extra_specs': _print_type_extra_specs}
+    utils.print_list(vtypes, ['ID', 'Name', 'extra_specs'], formatters)
+
+
+@utils.arg(
+    '--all-tenants',
+    dest='all_tenants',
+    metavar='<0|1>',
+    nargs='?',
+    type=int,
+    const=1,
+    default=0,
+    help='Display information from all tenants (Admin only).')
+@utils.arg(
+    '--all_tenants',
+    nargs='?',
+    type=int,
+    const=1,
+    help=argparse.SUPPRESS)
 @utils.arg('--name',
            metavar='<name>',
            default=None,
            help='Filter results by name')
-@utils.arg('--display-name',
-           help=argparse.SUPPRESS)
-@utils.arg('--status',
-           metavar='<status>',
-           default=None,
-           help='Filter results by status')
+@utils.arg(
+    '--display-name',
+    metavar='<display-name>',
+    default=None,
+    help='Filter results by display-name')
+@utils.arg(
+    '--status',
+    metavar='<status>',
+    default=None,
+    help='Filter results by status')
 @utils.service_type('volume')
 def do_list(cs, args):
     """List all the volumes."""
@@ -464,15 +509,6 @@ def do_snapshot_rename(cs, args):
     _find_volume_snapshot(cs, args.snapshot).update(**kwargs)
 
 
-def _print_volume_type_list(vtypes):
-    utils.print_list(vtypes, ['ID', 'Name'])
-
-
-def _print_type_and_extra_specs_list(vtypes):
-    formatters = {'extra_specs': _print_type_extra_specs}
-    utils.print_list(vtypes, ['ID', 'Name', 'extra_specs'], formatters)
-
-
 @utils.service_type('volume')
 def do_type_list(cs, args):
     """Print a list of available 'volume types'."""
@@ -655,13 +691,6 @@ def do_rate_limits(cs, args):
     utils.print_list(limits, columns)
 
 
-def _print_type_extra_specs(vol_type):
-    try:
-        return vol_type.get_keys()
-    except exceptions.NotFound:
-        return "N/A"
-
-
 def _find_volume_type(cs, vtype):
     """Get a volume type by name or ID."""
     return utils.find_resource(cs.volume_types, vtype)
@@ -703,3 +732,86 @@ def do_upload_to_image(cs, args):
                            args.image_name,
                            args.container_format,
                            args.disk_format)
+
+
+@utils.arg('volume-id', metavar='<volume-id>',
+           help='ID of the volume to backup.')
+@utils.arg('--container', metavar='<container>',
+           help='Optional swift container name. (Default=None)',
+           default=None)
+@utils.arg('--display-name',
+           help=argparse.SUPPRESS)
+@utils.arg('--name', metavar='<name>',
+           help='Optional backup name. (Default=None)',
+           default=None)
+@utils.arg('--description',
+           metavar='<description>',
+           default=None,
+           help='Options backup description (Default=None)')
+@utils.service_type('volume')
+def do_backup_create(cs, args):
+    """Creates a backup."""
+    if args.display_name is not None:
+        args.name = args.display_name
+
+    if args.display_description is not None:
+        args.description = args.display_description
+
+    cs.backups.create(args.volume_id,
+                      args.container,
+                      args.name,
+                      args.description)
+
+
+@utils.arg('backup-id', metavar='<backup-id>', help='ID of the backup.')
+@utils.service_type('volume')
+def do_backup_show(cs, args):
+    """Show details about a backup."""
+    backup = _find_backup(cs, args.backup_id)
+    _print_backup(cs, backup)
+
+
+@utils.service_type('volume')
+def do_backup_list(cs, args):
+    """List all the backups."""
+    backups = cs.backups.list()
+
+    # columns we want to display incl. names to use in output
+    columns = ['Backup ID', 'Name', 'Status', 'Fail Reason',
+               'Description', 'Swift Container', 'Created At',
+               'Size GB', 'Swift Object Count', 'Volume ID',
+               'AZ']
+
+    # mappings from database column names to display column names
+    # (where they differ)
+    convert = [('id', 'backup_id'), ('display_name', 'name'),
+               ('display_description', 'description'),
+               ('size', 'size_gb'),
+               ('container', 'swift_container'),
+               ('object_count', 'swift_object_count'),
+               ('availability_zone', 'az')]
+
+    _translate_keys(backups, convert)
+    utils.print_list(backups, columns)
+
+
+@utils.arg('backup-id',
+           metavar='<backup-id>',
+           help='ID of the backup to delete.')
+@utils.service_type('volume')
+def do_backup_delete(cs, args):
+    """Remove a backup."""
+    backup = _find_backup(cs, args.backup_id)
+    backup.delete()
+
+
+@utils.arg('backup-id', metavar='<backup-id>',
+           help='ID of the backup to restore.')
+@utils.arg('--volume-id', metavar='<volume-id>',
+           help='Optional ID of the volume to restore to.',
+           default=None)
+@utils.service_type('volume')
+def do_backup_restore(cs, args):
+    """Restore a backup."""
+    cs.restores.restore(args.backup_id,
+                        args.volume_id)

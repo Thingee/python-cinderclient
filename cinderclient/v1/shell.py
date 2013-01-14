@@ -26,9 +26,7 @@ from cinderclient import utils
 
 def _poll_for_status(poll_fn, obj_id, action, final_ok_states,
                      poll_period=5, show_progress=True):
-    """Block while an action is being performed, periodically printing
-    progress.
-    """
+    """Block while action is performed, periodically printing progress."""
     def print_progress(progress):
         if show_progress:
             msg = ('\rInstance %(action)s... %(progress)s%% complete'
@@ -56,6 +54,13 @@ def _poll_for_status(poll_fn, obj_id, action, final_ok_states,
             time.sleep(poll_period)
 
 
+def _print_type_extra_specs(vol_type):
+    try:
+        return vol_type.get_keys()
+    except exceptions.NotFound:
+        return "N/A"
+
+
 def _find_volume(cs, volume):
     """Get a volume by ID."""
     return utils.find_resource(cs.volumes, volume)
@@ -74,22 +79,32 @@ def _print_volume_snapshot(snapshot):
     utils.print_dict(snapshot._info)
 
 
-def _translate_volume_keys(collection):
-    convert = [('displayName', 'display_name'), ('volumeType', 'volume_type')]
+def _translate_keys(collection, convert):
     for item in collection:
         keys = item.__dict__.keys()
         for from_key, to_key in convert:
             if from_key in keys and to_key not in keys:
                 setattr(item, to_key, item._info[from_key])
+
+
+def _translate_volume_keys(collection):
+    convert = [('displayName', 'display_name'), ('volumeType', 'volume_type')]
+    _translate_keys(collection, convert)
 
 
 def _translate_volume_snapshot_keys(collection):
     convert = [('displayName', 'display_name'), ('volumeId', 'volume_id')]
-    for item in collection:
-        keys = item.__dict__.keys()
-        for from_key, to_key in convert:
-            if from_key in keys and to_key not in keys:
-                setattr(item, to_key, item._info[from_key])
+    _translate_keys(collection, convert)
+
+
+def _translate_backup_keys(collection):
+    convert = [('id', 'backup_id'), ('display_name', 'name'),
+               ('display_description', 'description'),
+               ('size', 'size_gb'),
+               ('container', 'swift_container'),
+               ('object_count', 'swift_object_count'),
+               ('availability_zone', 'az')]
+    _translate_keys(collection, convert)
 
 
 def _extract_metadata(args):
@@ -104,6 +119,24 @@ def _extract_metadata(args):
 
         metadata[key] = value
     return metadata
+
+
+def _find_backup(cs, backup):
+    """Get a backup by ID."""
+    return utils.find_resource(cs.backups, backup)
+
+
+def _print_backup(cs, backup):
+    utils.print_dict(backup._info)
+
+
+def _print_volume_type_list(vtypes):
+    utils.print_list(vtypes, ['ID', 'Name'])
+
+
+def _print_type_and_extra_specs_list(vtypes):
+    formatters = {'extra_specs': _print_type_extra_specs}
+    utils.print_list(vtypes, ['ID', 'Name', 'extra_specs'], formatters)
 
 
 @utils.arg(
@@ -419,15 +452,6 @@ def do_snapshot_rename(cs, args):
     _find_volume_snapshot(cs, args.snapshot).update(**kwargs)
 
 
-def _print_volume_type_list(vtypes):
-    utils.print_list(vtypes, ['ID', 'Name'])
-
-
-def _print_type_and_extra_specs_list(vtypes):
-    formatters = {'extra_specs': _print_type_extra_specs}
-    utils.print_list(vtypes, ['ID', 'Name', 'extra_specs'], formatters)
-
-
 @utils.service_type('volume')
 def do_type_list(cs, args):
     """Print a list of available 'volume types'."""
@@ -606,13 +630,6 @@ def do_rate_limits(cs, args):
     utils.print_list(limits, columns)
 
 
-def _print_type_extra_specs(vol_type):
-    try:
-        return vol_type.get_keys()
-    except exceptions.NotFound:
-        return "N/A"
-
-
 def _find_volume_type(cs, vtype):
     """Get a volume type by name or ID."""
     return utils.find_resource(cs.volume_types, vtype)
@@ -648,3 +665,65 @@ def do_upload_to_image(cs, args):
                            args.image_name,
                            args.container_format,
                            args.disk_format)
+
+
+@utils.arg('volume_id', metavar='<volume_id>',
+           help='ID of the volume to backup.')
+@utils.arg('--container', metavar='<container>',
+           help='Optional swift container name. (Default=None)',
+           default=None)
+@utils.arg('--display_name', metavar='<display_name>',
+           help='Optional backup name. (Default=None)',
+           default=None)
+@utils.arg('--display_description', metavar='<display_description>',
+           help='Optional backup description. (Default=None)',
+           default=None)
+@utils.service_type('volume')
+def do_backup_create(cs, args):
+    """Creates a backup."""
+    cs.backups.create(args.volume_id,
+                      args.container,
+                      args.display_name,
+                      args.display_description)
+
+
+@utils.arg('backup_id', metavar='<backup_id>', help='ID of the backup.')
+@utils.service_type('volume')
+def do_backup_show(cs, args):
+    """Show details about a backup."""
+    backup = _find_backup(cs, args.backup_id)
+    _print_backup(cs, backup)
+
+
+@utils.service_type('volume')
+def do_backup_list(cs, args):
+    """List all the backups."""
+    backups = cs.backups.list()
+
+    # columns we want to display incl. names to use in output
+    columns = ['Backup ID', 'Name', 'Status', 'Fail Reason',
+               'Description', 'Swift Container', 'Created At',
+               'Size GB', 'Swift Object Count', 'Volume ID',
+               'AZ']
+    _translate_backup_keys(backups)
+    utils.print_list(backups, columns)
+
+
+@utils.arg('backup', metavar='<backup>', help='ID of the backup to delete.')
+@utils.service_type('volume')
+def do_backup_delete(cs, args):
+    """Remove a backup."""
+    backup = _find_backup(cs, args.backup)
+    backup.delete()
+
+
+@utils.arg('backup_id', metavar='<backup_id>',
+           help='ID of the backup to restore.')
+@utils.arg('--volume_id', metavar='<volume_id>',
+           help='Optional ID of the volume to restore to.',
+           default=None)
+@utils.service_type('volume')
+def do_backup_restore(cs, args):
+    """Restore a backup."""
+    cs.restores.restore(args.backup_id,
+                        args.volume_id)
