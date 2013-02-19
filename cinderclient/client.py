@@ -48,7 +48,7 @@ class HTTPClient(object):
         self.projectid = projectid
         self.tenant_id = tenant_id
         self.auth_url = auth_url.rstrip('/')
-        self.version = 'v1'
+        self.version = 'v2'
         self.region_name = region_name
         self.endpoint_type = endpoint_type
         self.service_type = service_type
