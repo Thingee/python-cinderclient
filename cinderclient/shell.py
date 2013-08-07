@@ -41,7 +41,7 @@ from cinderclient.v2 import shell as shell_v2
 
 DEFAULT_OS_VOLUME_API_VERSION = "1"
 DEFAULT_CINDER_ENDPOINT_TYPE = 'publicURL'
-DEFAULT_CINDER_SERVICE_TYPE = 'compute'
+DEFAULT_CINDER_SERVICE_TYPE = 'volume'
 
 logger = logging.getLogger(__name__)
 
